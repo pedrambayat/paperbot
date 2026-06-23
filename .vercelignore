@@ -1,0 +1,13 @@
+# Keep large/dev-only files out of the deployment upload.
+.venv
+.venv312
+__pycache__
+*.pyc
+.pytest_cache
+.git
+tests
+deploy
+scripts
+paperbot.egg-info
+*.sqlite3
+.env

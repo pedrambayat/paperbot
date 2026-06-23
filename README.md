@@ -92,6 +92,32 @@ API keys needed:
 - Slack dry-run bot: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `PAPERBOT_CHANNEL_ID`.
 - Slack real-summary bot: Slack tokens plus `OPENAI_API_KEY`.
 
+## Run modes
+
+Paperbot can run two ways from the same codebase:
+
+- **Socket Mode** (`paperbot`): a long-running process (local, launchd, or any always-on host). Reacts instantly; uses SQLite for dedup. Needs `SLACK_APP_TOKEN`.
+- **Serverless webhook** (`api/`): Slack Events API → Vercel functions. Nothing runs at idle; instant; free on Vercel Hobby. Uses Upstash Redis for dedup and QStash to defer work past Slack's 3-second ack. No `SLACK_APP_TOKEN`.
+
+Both share the same retrieval/summarization core (`paperbot/core.py`, `paperbot/events.py`).
+
+## Serverless deployment (Vercel + Upstash)
+
+Real-time and free, with nothing running between events.
+
+```
+Slack message → /api/slack/events  (verify signature, ack <3s, enqueue to QStash)
+              → QStash             → /api/process  (verify, dedup, retrieve+summarize+post)
+```
+
+1. **Upstash** (free): create a **Redis** database (copy `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`) and a **QStash** instance (copy `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`).
+2. **Deploy**: `vercel deploy` (the `api/*.py` files become functions; `requirements.txt` installs deps; `vercel.json` sets `maxDuration` to 300s).
+3. **Set env vars** in Vercel (Project → Settings → Environment Variables): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `PAPERBOT_CHANNEL_ID`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `UNPAYWALL_EMAIL`, the Upstash + QStash values above, and `PAPERBOT_PROCESS_URL=https://<your-app>.vercel.app/api/process`. Redeploy so the URL is picked up.
+4. **Slack app**: enable **Event Subscriptions**, set the Request URL to `https://<your-app>.vercel.app/api/slack/events` (Slack will verify it via the handshake), and subscribe to the **`message.channels`** bot event. Copy the **Signing Secret** into `SLACK_SIGNING_SECRET`. Make sure the bot is in the watched channel.
+5. **Test**: post an arXiv/bioRxiv link in the channel — the summary should appear in-thread within seconds.
+
+Socket Mode can be left enabled or disabled; the webhook path does not use it.
+
 ## Local Checks
 
 ```bash

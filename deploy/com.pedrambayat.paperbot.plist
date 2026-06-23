@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pedrambayat.paperbot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/pedrambayat/paperbot/scripts/run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/pedrambayat/paperbot</string>
+
+    <!-- Start automatically when you log in -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart the bot if it ever exits or crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't hammer-restart; wait at least 10s between relaunches -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/pedrambayat/Library/Logs/paperbot.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/pedrambayat/Library/Logs/paperbot.log</string>
+</dict>
+</plist>

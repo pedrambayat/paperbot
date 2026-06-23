@@ -1,4 +1,5 @@
-from paperbot.app import detect_pdf_files, slack_pdf_ref
+from paperbot.core import slack_pdf_ref
+from paperbot.events import detect_pdf_files
 from paperbot.models import PaperKind
 
 
