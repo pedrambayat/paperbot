@@ -1,0 +1,21 @@
+# Secrets / local config
+.env
+
+# Virtual environments
+.venv/
+.venv312/
+venv/
+
+# Python build / cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Runtime data
+*.sqlite3
+
+# OS / editor
+.DS_Store

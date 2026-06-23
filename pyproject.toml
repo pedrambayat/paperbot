@@ -1,0 +1,30 @@
+[project]
+name = "paperbot"
+version = "0.1.0"
+description = "Slack bot that summarizes papers shared in a lab channel."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "certifi>=2024.2.2",
+  "curl-cffi>=0.7",
+  "httpx>=0.27",
+  "openai>=2.0",
+  "slack-bolt>=1.23",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+paperbot = "paperbot.app:main"
+paperbot-smoke = "paperbot.smoke:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
