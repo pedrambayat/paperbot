@@ -8,12 +8,20 @@ REF = PaperRef(PaperKind.ARXIV, "2401.01234", "https://arxiv.org/abs/2401.01234"
 
 
 class FakeStore:
-    def __init__(self, existing=None):
+    def __init__(self, existing=None, claimable=True):
         self.existing = existing
+        self.claimable = claimable
+        self._claimed = False
         self.saved = []
 
     def get(self, canonical_id):
         return self.existing
+
+    def claim(self, canonical_id):
+        if not self.claimable or self._claimed:
+            return False
+        self._claimed = True
+        return True
 
     def save(self, paper, summary, slack_channel, slack_ts):
         self.saved.append((paper, summary, slack_channel, slack_ts))
@@ -69,6 +77,29 @@ def test_duplicate_paper_posts_notice_and_does_not_retrieve_or_save():
     assert retrieved == []  # dedup short-circuits before any network retrieval
     assert store.saved == []
     assert len(client.posts) == 1  # only the "already summarized" notice
+
+
+def test_concurrent_duplicate_is_skipped_silently():
+    # claim() returns False -> another delivery is already handling this paper.
+    store, client = FakeStore(existing=None, claimable=False), FakeClient()
+    retrieved = []
+
+    def factory():
+        retrieved.append(True)
+        return _paper()
+
+    summarize_and_post(
+        ref=REF,
+        paper_factory=factory,
+        store=store,
+        summarizer=DryRunSummarizer(),
+        client=client,
+        channel_id="C1",
+        thread_ts="1.1",
+    )
+    assert retrieved == []      # never retrieved
+    assert store.saved == []    # never saved
+    assert client.posts == []   # posted nothing (no duplicate spam)
 
 
 class FakeRetriever:

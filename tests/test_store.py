@@ -36,3 +36,10 @@ def test_store_saves_summary_metadata():
         assert saved["slack_channel"] == "C123"
         assert saved["slack_ts"] == "1719160000.000200"
         assert saved["mode"] == "full_text"
+
+
+def test_claim_is_atomic_first_wins():
+    with TemporaryDirectory() as tmpdir:
+        store = SummaryStore(Path(tmpdir) / "paperbot.sqlite3")
+        assert store.claim("arxiv:2401.01234") is True
+        assert store.claim("arxiv:2401.01234") is False

@@ -39,13 +39,19 @@ def summarize_and_post(
     behind ``paper_factory`` so a duplicate never triggers a network fetch.
     """
     existing = store.get(ref.canonical_id)
-    if existing:
+    if existing and existing.get("slack_ts"):
+        # Already fully summarized before -> point back to the prior summary.
         client.chat_postMessage(
             channel=channel_id,
             thread_ts=thread_ts,
             blocks=duplicate_blocks(existing["slack_ts"]),
             text="Already summarized this paper.",
         )
+        return
+
+    if not store.claim(ref.canonical_id):
+        # A concurrent delivery (e.g. a Slack retry) is already handling this paper.
+        # Skip silently so the same paper isn't summarized and posted twice.
         return
 
     paper = paper_factory()

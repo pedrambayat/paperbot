@@ -38,6 +38,22 @@ class SummaryStore:
                 """
             )
 
+    def claim(self, canonical_id: str) -> bool:
+        """Atomically claim a paper for processing. Returns True only for the first
+        caller (relies on the primary-key conflict of INSERT OR IGNORE); a later
+        ``save`` overwrites the placeholder with the full record.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO summaries
+                  (canonical_id, source_url, mode, summary_json, slack_channel, slack_ts)
+                VALUES (?, '', '', '{}', '', '')
+                """,
+                (canonical_id,),
+            )
+            return cursor.rowcount > 0
+
     def get(self, canonical_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(

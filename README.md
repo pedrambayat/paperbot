@@ -57,66 +57,120 @@ For bioRxiv and medRxiv, Paperbot first tries the paper PDF. If that is blocked,
 
 bioRxiv/medRxiv and many publishers serve full-text PDFs from behind Cloudflare, which blocks plain HTTP clients on their TLS fingerprint. Paperbot downloads full-text content with a browser-impersonating client (`curl_cffi`) so it can fetch the actual paper rather than degrading to abstract-only. If a host still blocks the download, upload the PDF file directly to Slack; Paperbot can download Slack-hosted PDFs with the bot token and summarize the full document.
 
-## Required Slack App Settings
+# Deploy Paperbot to your Slack channel (recommended: serverless, free)
 
-Use Socket Mode. The app needs:
-
-- `SLACK_BOT_TOKEN`: bot token, usually `xoxb-...`
-- `SLACK_APP_TOKEN`: app-level token, usually `xapp-...`
-- `PAPERBOT_CHANNEL_ID`: the channel ID to watch
-
-Bot scopes:
-
-- `channels:history`
-- `chat:write`
-- `files:read`
-- `links:read`
-- `reactions:read` and `reactions:write` if status emoji mode is enabled later
-
-Events:
-
-- `message.channels`
-
-## Environment
-
-See `.env.example`.
-
-Use `PAPERBOT_DRY_RUN=1` to run without calling OpenAI. The bot will still retrieve papers and post deterministic placeholder summaries.
-
-`OPENAI_MODEL` defaults to `gpt-5-mini` in code and in `.env.example` to keep routine paper summaries inexpensive. Override it only when you want a higher-quality or account-specific model.
-
-API keys needed:
-
-- Local smoke test dry-run: no OpenAI key, no Slack tokens.
-- Local smoke test with `--real`: `OPENAI_API_KEY`.
-- Slack dry-run bot: `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `PAPERBOT_CHANNEL_ID`.
-- Slack real-summary bot: Slack tokens plus `OPENAI_API_KEY`.
-
-## Run modes
-
-Paperbot can run two ways from the same codebase:
-
-- **Socket Mode** (`paperbot`): a long-running process (local, launchd, or any always-on host). Reacts instantly; uses SQLite for dedup. Needs `SLACK_APP_TOKEN`.
-- **Serverless webhook** (`api/`): Slack Events API → Vercel functions. Nothing runs at idle; instant; free on Vercel Hobby. Uses Upstash Redis for dedup and QStash to defer work past Slack's 3-second ack. No `SLACK_APP_TOKEN`.
-
-Both share the same retrieval/summarization core (`paperbot/core.py`, `paperbot/events.py`).
-
-## Serverless deployment (Vercel + Upstash)
-
-Real-time and free, with nothing running between events.
+This is the full, start-to-finish setup. The serverless path is **free** (Vercel
+Hobby + Upstash free tiers), **instant**, and runs **nothing at idle** — no server
+to babysit. End result: paste a paper link in your channel and a summary appears
+in-thread.
 
 ```
-Slack message → /api/slack/events  (verify signature, ack <3s, enqueue to QStash)
-              → QStash             → /api/process  (verify, dedup, retrieve+summarize+post)
+Slack message ─▶ POST /api/slack/events   (verify Slack signature, ack <3s, enqueue to QStash)
+              ─▶ QStash ─▶ POST /api/process   (verify QStash, claim/dedup, retrieve → summarize → post)
 ```
 
-1. **Upstash** (free): create a **Redis** database (copy `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`) and a **QStash** instance (copy `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY`, `QSTASH_NEXT_SIGNING_KEY`).
-2. **Deploy**: `vercel deploy` (the `api/*.py` files become functions; `requirements.txt` installs deps; `vercel.json` sets `maxDuration` to 300s).
-3. **Set env vars** in Vercel (Project → Settings → Environment Variables): `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `PAPERBOT_CHANNEL_ID`, `OPENAI_API_KEY`, `OPENAI_MODEL`, `UNPAYWALL_EMAIL`, the Upstash + QStash values above, and `PAPERBOT_PROCESS_URL=https://<your-app>.vercel.app/api/process`. Redeploy so the URL is picked up.
-4. **Slack app**: enable **Event Subscriptions**, set the Request URL to `https://<your-app>.vercel.app/api/slack/events` (Slack will verify it via the handshake), and subscribe to the **`message.channels`** bot event. Copy the **Signing Secret** into `SLACK_SIGNING_SECRET`. Make sure the bot is in the watched channel.
-5. **Test**: post an arXiv/bioRxiv link in the channel — the summary should appear in-thread within seconds.
+It's one Flask app (`index.py`) deployed to Vercel; QStash defers the slow work
+past Slack's 3-second deadline; Upstash Redis stores dedup state.
 
-Socket Mode can be left enabled or disabled; the webhook path does not use it.
+### What you'll need
+
+- A **Slack workspace** where you can create an app.
+- A free **Vercel** account + the CLI: `npm i -g vercel`.
+- A free **Upstash** account (for Redis + QStash).
+- An **OpenAI API key**.
+
+### 1. Create the Slack app
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**. Name it (e.g. `paperbot`), pick your workspace.
+2. **OAuth & Permissions → Scopes → Bot Token Scopes**, add: `channels:history`, `chat:write`, `files:read`, `links:read`.
+3. **Install to Workspace**, then copy the **Bot User OAuth Token** (`xoxb-…`) → this is `SLACK_BOT_TOKEN`.
+4. **Basic Information → App Credentials → Signing Secret** → this is `SLACK_SIGNING_SECRET`.
+5. In Slack, **invite the bot to your channel**: `/invite @paperbot`. Get the channel ID (channel name → About → bottom, looks like `C0XXXXXXX`) → this is `PAPERBOT_CHANNEL_ID`.
+
+(Leave Event Subscriptions until step 5 — the Request URL must exist first.)
+
+### 2. Create the Upstash resources
+
+In the [Upstash console](https://console.upstash.com):
+
+1. **Redis → Create Database** (free). Open it → **REST API** section → copy `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+2. **QStash** → copy `QSTASH_TOKEN`, and under **Signing Keys** copy `QSTASH_CURRENT_SIGNING_KEY` and `QSTASH_NEXT_SIGNING_KEY`.
+
+> ⚠️ **QStash region matters.** QStash is multi-region with **separate tokens per region**. The global endpoint `https://qstash.upstash.io` routes to **EU**. If your QStash lives in **US**, you must set `QSTASH_URL=https://qstash-us-east-1.upstash.io` (step 4) or publishes fail with `user not found in this region`. EU users can use `https://qstash.upstash.io`.
+
+### 3. Deploy to Vercel
+
+From the repo root:
+
+```bash
+vercel deploy --prod    # links the project on first run; deploys index.py
+```
+
+Note the production URL it prints, e.g. `https://your-app.vercel.app`.
+
+### 4. Set environment variables (then redeploy)
+
+In **Vercel → your project → Settings → Environment Variables** (scope **Production**), add:
+
+| Variable | Value / where to get it |
+|---|---|
+| `SLACK_BOT_TOKEN` | Slack bot token (`xoxb-…`) from step 1 |
+| `SLACK_SIGNING_SECRET` | Slack Signing Secret from step 1 |
+| `PAPERBOT_CHANNEL_ID` | Channel ID (`C0…`) from step 1 |
+| `OPENAI_API_KEY` | Your OpenAI key |
+| `OPENAI_MODEL` | `gpt-5-mini` (default; cheap) |
+| `UPSTASH_REDIS_REST_URL` | from step 2 |
+| `UPSTASH_REDIS_REST_TOKEN` | from step 2 |
+| `QSTASH_TOKEN` | from step 2 |
+| `QSTASH_CURRENT_SIGNING_KEY` | from step 2 |
+| `QSTASH_NEXT_SIGNING_KEY` | from step 2 |
+| `QSTASH_URL` | **US:** `https://qstash-us-east-1.upstash.io` · **EU:** `https://qstash.upstash.io` (see ⚠️ above) |
+| `PAPERBOT_PROCESS_URL` | `https://your-app.vercel.app/api/process` (from step 3) |
+| `UNPAYWALL_EMAIL` | *(optional)* your email, for Unpaywall DOI lookups |
+| `PAPERBOT_DRY_RUN` | *(optional)* `1` to test the pipeline with placeholder summaries (no OpenAI cost); set `0` or omit for real summaries |
+
+Then **redeploy** so the values take effect: `vercel deploy --prod`.
+
+### 5. Wire up Slack Event Subscriptions
+
+In your Slack app settings:
+
+1. **Socket Mode → OFF.** (Required — the HTTP Request URL is ignored while Socket Mode is on. Socket Mode and the webhook are mutually exclusive.)
+2. **Event Subscriptions → Enable**, set the **Request URL** to:
+   `https://your-app.vercel.app/api/slack/events`
+   Wait for the green **Verified ✓** (Slack sends a signed handshake; the endpoint answers it).
+3. **Subscribe to bot events** → add **`message.channels`** → **Save Changes**.
+4. If Slack shows a **reinstall** banner, reinstall the app.
+
+### 6. Test
+
+Post an **arXiv** link (e.g. `https://arxiv.org/abs/1706.03762`) in the channel. A full-text summary should appear in-thread within a few seconds.
+
+### Notes & gotchas
+
+- **Redeploy after any env var change** — Vercel bakes env vars at deploy time.
+- **bioRxiv/medRxiv → abstract-only on Vercel.** Their Cloudflare blocks datacenter IPs even with browser impersonation, so full-text PDF fetch fails and Paperbot degrades to an abstract-only summary. arXiv and most other sources get full text. (Running the Socket Mode bot from a residential IP gets full-text bioRxiv — see below.)
+- **Watch it live:** `vercel logs your-app.vercel.app`.
+- `OPENAI_MODEL` defaults to `gpt-5-mini` to keep summaries inexpensive.
+
+## Alternative: Socket Mode (long-running process)
+
+The same codebase also runs as a persistent process via `paperbot` — useful for
+local development, or running from a residential IP (which gets full-text bioRxiv).
+This mode uses **Socket Mode** instead of the Events API and **SQLite** instead of
+Redis. It additionally needs `SLACK_APP_TOKEN` (an app-level token, `xapp-…`, from
+**Basic Information → App-Level Tokens** with the `connections:write` scope) and
+Socket Mode **enabled** in the Slack app.
+
+```bash
+pip install -e ".[dev]"
+cp .env.example .env   # fill SLACK_BOT_TOKEN, SLACK_APP_TOKEN, PAPERBOT_CHANNEL_ID, OPENAI_API_KEY
+paperbot
+```
+
+`deploy/com.pedrambayat.paperbot.plist` + `scripts/run.sh` show how to run it as a
+hands-off macOS launchd service. Set `PAPERBOT_DRY_RUN=1` to run without calling
+OpenAI (placeholder summaries).
 
 ## Local Checks
 

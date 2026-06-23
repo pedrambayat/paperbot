@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import httpx
 
-QSTASH_PUBLISH_URL = "https://qstash.upstash.io/v2/publish/"
+# QStash is multi-region with per-region endpoints and tokens. The global default
+# routes to EU; US accounts must use https://qstash-us-east-1.upstash.io. Set the
+# QSTASH_URL env var to match where your QStash credentials were created.
+DEFAULT_QSTASH_URL = "https://qstash.upstash.io"
 
 
 def publish_job(
@@ -10,6 +13,7 @@ def publish_job(
     destination_url: str,
     job: dict,
     *,
+    base_url: str = DEFAULT_QSTASH_URL,
     client: httpx.Client | None = None,
     timeout: float = 10.0,
 ) -> None:
@@ -20,11 +24,12 @@ def publish_job(
     """
     client = client or httpx.Client(timeout=timeout)
     response = client.post(
-        QSTASH_PUBLISH_URL + destination_url,
+        base_url.rstrip("/") + "/v2/publish/" + destination_url,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json=job,
     )
-    response.raise_for_status()
+    if response.status_code >= 300:
+        raise RuntimeError(f"QStash publish failed: HTTP {response.status_code}: {response.text}")
 
 
 def verify_qstash_signature(

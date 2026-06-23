@@ -1,8 +1,9 @@
-# Runtime dependencies for the Vercel serverless functions (api/).
+# Runtime dependencies for the Vercel app (index.py).
 # Socket Mode (slack-bolt) is intentionally excluded — the webhook worker
-# talks to Slack via slack-sdk's WebClient.
+# talks to Slack via slack-sdk's WebClient. Flask is the WSGI entrypoint.
 certifi>=2024.2.2
 curl-cffi>=0.7
+flask>=3.0
 httpx>=0.27
 openai>=2.0
 slack-sdk>=3.21

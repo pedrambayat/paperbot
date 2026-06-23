@@ -31,10 +31,21 @@ def test_publish_job_posts_to_qstash_destination_with_auth_and_body():
     assert seen["body"] == job
 
 
-def test_publish_job_raises_on_qstash_error():
+def test_publish_job_uses_custom_base_url_for_region():
+    client, seen = _capture()
+    publish_job(TOKEN, DEST, {"x": 1}, base_url="https://qstash-us-east-1.upstash.io", client=client)
+    assert seen["url"].startswith("https://qstash-us-east-1.upstash.io/v2/publish/")
+    assert DEST in seen["url"]
+
+
+def test_publish_job_raises_with_status_and_body_on_error():
+    # The QStash error body must be surfaced (not swallowed) so failures are debuggable.
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(401, json={"error": "unauthorized"})
+        return httpx.Response(404, text="destination url is not valid")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(RuntimeError) as exc_info:
         publish_job(TOKEN, DEST, {"x": 1}, client=client)
+    message = str(exc_info.value)
+    assert "404" in message
+    assert "destination url is not valid" in message

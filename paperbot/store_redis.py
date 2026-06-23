@@ -41,6 +41,17 @@ class RedisSummaryStore:
         response.raise_for_status()
         return response.json().get("result")
 
+    def claim(self, canonical_id: str, ttl_seconds: int = 300) -> bool:
+        """Atomically claim a paper for processing. Returns True only for the first
+        caller; concurrent/duplicate deliveries get False and should skip. The claim
+        is a short-lived placeholder (TTL) so a crashed worker doesn't block the
+        paper forever; a successful summary overwrites it via ``save``.
+        """
+        result = self._command(
+            "SET", self.namespace + canonical_id, "{}", "NX", "EX", str(ttl_seconds)
+        )
+        return result == "OK"
+
     def get(self, canonical_id: str) -> dict | None:
         result = self._command("GET", self.namespace + canonical_id)
         if result is None:

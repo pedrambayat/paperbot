@@ -18,7 +18,11 @@ def _fake_upstash():
         command = json.loads(request.content)
         op = command[0].upper()
         if op == "SET":
-            data[command[1]] = command[2]
+            key, value = command[1], command[2]
+            options = [str(a).upper() for a in command[3:]]
+            if "NX" in options and key in data:
+                return httpx.Response(200, json={"result": None})  # not set; already exists
+            data[key] = value
             return httpx.Response(200, json={"result": "OK"})
         if op == "GET":
             return httpx.Response(200, json={"result": data.get(command[1])})
@@ -59,3 +63,18 @@ def test_save_writes_namespaced_key():
     store.save(_paper(), _summary(), "C123", "1.1")
     assert any(key.endswith("arxiv:2401.01234") for key in data)
     assert all(key.startswith("paperbot:") for key in data)
+
+
+def test_claim_is_atomic_first_wins():
+    store, _ = _store()
+    assert store.claim("arxiv:2401.01234") is True   # first claim succeeds
+    assert store.claim("arxiv:2401.01234") is False  # second is blocked (already claimed)
+
+
+def test_claimed_key_is_readable_as_empty_record():
+    # A claim must store a JSON value so get() returns a dict (not crash), with no slack_ts yet.
+    store, _ = _store()
+    store.claim("arxiv:2401.01234")
+    record = store.get("arxiv:2401.01234")
+    assert isinstance(record, dict)
+    assert not record.get("slack_ts")
