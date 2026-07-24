@@ -19,3 +19,6 @@ dist/
 
 # OS / editor
 .DS_Store
+
+# Local-only product doc (kept off the remote)
+plan.md
