@@ -51,6 +51,11 @@ def main() -> None:
     summarizer = build_smoke_summarizer(args.real, args.model)
     try:
         for index, ref in enumerate(refs, start=1):
+            resolved = retriever.resolve_ref(ref)
+            if resolved is None:
+                print(f"\n[{index}] {ref.source_url}: not a paper page (no citation metadata found).")
+                continue
+            ref = resolved
             paper = retriever.retrieve(ref)
             summary = summarizer.summarize(paper)
             if args.json:

@@ -11,6 +11,9 @@ class PaperKind(StrEnum):
     MEDRXIV = "medrxiv"
     DOI = "doi"
     PDF = "pdf"
+    # A URL that may be a journal article page; resolved to a DOI/PDF ref by
+    # PaperRetriever.resolve_ref() before dedupe, or dropped if it isn't a paper.
+    WEBPAGE = "webpage"
 
 
 class RetrievalMode(StrEnum):

@@ -3,17 +3,48 @@ from __future__ import annotations
 import re
 import xml.etree.ElementTree as ET
 from html import unescape
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from curl_cffi import requests as browser_requests
 
+from .link_detector import DOI_RE, host_matches, normalize_doi
 from .models import PaperKind, PaperRef, RetrievedPaper, RetrievalMode
 
 ARXIV_API = "https://export.arxiv.org/api/query"
 CROSSREF_API = "https://api.crossref.org/works/{doi}"
+CROSSREF_QUERY_API = "https://api.crossref.org/works"
 OPENALEX_API = "https://api.openalex.org/works/https://doi.org/{doi}"
 UNPAYWALL_API = "https://api.unpaywall.org/v2/{doi}"
 BIO_RXIV_API = "https://api.biorxiv.org/details/{server}/{doi}"
+
+# Hosts where an unresolvable page is worth a visible failure notice rather
+# than a silent skip — a link here is almost certainly a paper the poster
+# expects a summary for.
+JOURNAL_HOSTS = frozenset(
+    {
+        "cell.com",
+        "sciencedirect.com",
+        "science.org",
+        "pnas.org",
+        "nejm.org",
+        "thelancet.com",
+        "springer.com",
+        "biomedcentral.com",
+        "wiley.com",
+        "oup.com",
+        "embopress.org",
+        "plos.org",
+        "acs.org",
+        "annualreviews.org",
+        "frontiersin.org",
+    }
+)
+
+# Elsevier PII, punctuated (S0092-8674(23)01331-1) or compact (S0092867423013311)
+# as it appears in cell.com / sciencedirect.com URLs.
+PII_PUNCTUATED_RE = re.compile(r"S\d{4}-\d{3}[\dX]\(\d{2}\)\d{5}-[\dX]", re.I)
+PII_COMPACT_RE = re.compile(r"S\d{15}[\dX]", re.I)
 
 
 class RetrievalError(RuntimeError):
@@ -34,6 +65,9 @@ class PaperRetriever:
         # browser for content downloads so we can reach the actual paper instead of
         # falling back to abstract-only.
         self.browser = browser_requests.Session(impersonate="chrome")
+        # Citation meta scraped while resolving a webpage ref, keyed by DOI, so
+        # _retrieve_doi's publisher-PDF fallback doesn't re-fetch the same page.
+        self._page_meta: dict[str, dict[str, object]] = {}
 
     def close(self) -> None:
         self.client.close()
@@ -51,6 +85,58 @@ class PaperRetriever:
         if ref.kind == PaperKind.PDF:
             return self._retrieve_pdf(ref)
         raise RetrievalError(f"Unsupported paper kind: {ref.kind}")
+
+    def resolve_ref(self, ref: PaperRef) -> PaperRef | None:
+        """Resolve a WEBPAGE candidate to a concrete DOI/PDF ref, or None.
+
+        Works for any journal: article pages universally embed Google
+        Scholar/Highwire meta tags (citation_doi, citation_pdf_url). For
+        cell.com/sciencedirect URLs whose pages are blocked, the Elsevier PII
+        in the URL is resolved to a DOI via Crossref instead. Returns None for
+        pages that aren't papers; raises RetrievalError only for known journal
+        hosts, where a silent skip would confuse the poster.
+        """
+        if ref.kind != PaperKind.WEBPAGE:
+            return ref
+        meta = self._fetch_citation_meta(ref.source_url)
+        doi = meta.get("doi") or self._doi_from_pii(ref.source_url)
+        if doi:
+            self._page_meta.setdefault(str(doi), meta)
+            return PaperRef(PaperKind.DOI, str(doi), ref.source_url)
+        pdf_url = meta.get("pdf_url")
+        if pdf_url:
+            return PaperRef(PaperKind.PDF, str(pdf_url), ref.source_url)
+        if host_matches(urlparse(ref.source_url).netloc, JOURNAL_HOSTS):
+            raise RetrievalError(f"Could not find a DOI or PDF on journal page {ref.source_url}")
+        return None
+
+    def _fetch_citation_meta(self, url: str) -> dict[str, object]:
+        """Best-effort: fetch a page and extract its citation meta tags."""
+        try:
+            response = self.browser.get(url, timeout=self.timeout, allow_redirects=True)
+        except Exception:  # noqa: BLE001 - network errors are soft failures here
+            return {}
+        if response.status_code >= 400:
+            return {}
+        meta = extract_citation_meta(response.text)
+        final_url = str(getattr(response, "url", "") or url)
+        if meta.get("pdf_url"):
+            meta["pdf_url"] = urljoin(final_url, str(meta["pdf_url"]))
+        meta.setdefault("landing_url", final_url)
+        return meta
+
+    def _doi_from_pii(self, url: str) -> str | None:
+        for pii in pii_candidates(url):
+            response = self.client.get(
+                CROSSREF_QUERY_API,
+                params={"filter": f"alternative-id:{pii}", "rows": 1},
+            )
+            if response.status_code >= 400:
+                continue
+            items = response.json().get("message", {}).get("items") or []
+            if items and items[0].get("DOI"):
+                return normalize_doi(str(items[0]["DOI"]))
+        return None
 
     def _retrieve_arxiv(self, ref: PaperRef) -> RetrievedPaper:
         arxiv_id = ref.identifier.removesuffix(".pdf")
@@ -175,6 +261,26 @@ class PaperRetriever:
             except RetrievalError:
                 pass
 
+        # No open-access copy found. Try the publisher's own PDF (via the
+        # citation_pdf_url meta tag on the article page) with the browser
+        # client — from an institutional IP range this often serves the
+        # subscription full text that Unpaywall/OpenAlex can't see.
+        page = self._page_meta.get(ref.identifier) or self._fetch_citation_meta(
+            paper.landing_url or f"https://doi.org/{ref.identifier}"
+        )
+        paper.title = paper.title or page.get("title")
+        paper.authors = paper.authors or list(page.get("authors") or [])
+        paper.abstract = paper.abstract or page.get("abstract")
+        publisher_pdf = page.get("pdf_url")
+        if publisher_pdf:
+            try:
+                paper.pdf_bytes = self._download_pdf(str(publisher_pdf))
+                paper.pdf_url = str(publisher_pdf)
+                paper.mode = RetrievalMode.FULL_TEXT
+                return paper
+            except RetrievalError:
+                pass
+
         if paper.abstract:
             paper.mode = RetrievalMode.ABSTRACT_ONLY
             return paper
@@ -238,6 +344,59 @@ class PaperRetriever:
         if not content.startswith(b"%PDF") and "pdf" not in content_type:
             raise RetrievalError(f"Expected PDF, got {content_type or 'unknown content type'}")
         return content
+
+
+META_TAG_RE = re.compile(r"<meta\s[^>]*?/?>", re.I | re.S)
+META_ATTR_RE = re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+
+
+def extract_citation_meta(html: str) -> dict[str, object]:
+    """Pull paper metadata from Google Scholar/Highwire meta tags.
+
+    Every major journal platform (Nature, Cell/Elsevier, Science, Springer,
+    Wiley, OUP, PLOS, ...) embeds these so Scholar can index it, which is what
+    makes webpage resolution journal-agnostic.
+    """
+    meta: dict[str, object] = {}
+    authors: list[str] = []
+    for tag in META_TAG_RE.findall(html):
+        attrs = {name.lower(): dq or sq for name, dq, sq in META_ATTR_RE.findall(tag)}
+        name = attrs.get("name") or attrs.get("property") or ""
+        content = unescape(attrs.get("content") or "").strip()
+        if not content:
+            continue
+        key = name.lower()
+        if key in {"citation_doi", "dc.identifier", "dc.identifier.doi"}:
+            match = DOI_RE.search(content)
+            if match and "doi" not in meta:
+                meta["doi"] = normalize_doi(match.group(0))
+        elif key == "citation_pdf_url":
+            meta.setdefault("pdf_url", content)
+        elif key == "citation_title":
+            meta.setdefault("title", clean_space(content))
+        elif key == "citation_author":
+            authors.append(clean_space(content))
+        elif key == "citation_abstract":
+            meta["abstract"] = clean_abstract(content)
+        elif key == "og:description":
+            meta.setdefault("abstract", clean_abstract(content))
+    if authors:
+        meta["authors"] = authors
+    return meta
+
+
+def pii_candidates(url: str) -> list[str]:
+    """Elsevier PIIs found in a URL, punctuated form first (Crossref's format)."""
+    candidates: list[str] = []
+    punctuated = PII_PUNCTUATED_RE.search(url)
+    if punctuated:
+        candidates.append(punctuated.group(0).upper())
+    compact = PII_COMPACT_RE.search(url)
+    if compact:
+        raw = compact.group(0).upper()
+        candidates.append(f"{raw[0:5]}-{raw[5:9]}({raw[9:11]}){raw[11:16]}-{raw[16]}")
+        candidates.append(raw)
+    return list(dict.fromkeys(candidates))
 
 
 def parse_arxiv_metadata(xml_text: str) -> tuple[str | None, list[str], str | None]:

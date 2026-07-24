@@ -89,6 +89,21 @@ def process_job(
     files = job.get("files") or []
 
     for ref in detect_papers(text):
+        if ref.kind == PaperKind.WEBPAGE:
+            # Resolve to a DOI/PDF ref before dedupe so a journal-page link and
+            # its doi.org twin share one canonical_id. Non-paper links resolve
+            # to None and are skipped without posting anything.
+            try:
+                resolved = retriever.resolve_ref(ref)
+            except (RetrievalError, httpx.HTTPError) as exc:
+                logger.exception("Failed to resolve %s", ref.source_url)
+                if post_failures:
+                    _post_failure(client, channel, thread_ts, ref.source_url, exc)
+                continue
+            if resolved is None:
+                logger.info("Skipping non-paper link %s", ref.source_url)
+                continue
+            ref = resolved
         _summarize_one(
             ref,
             lambda ref=ref: retriever.retrieve(ref),
@@ -127,12 +142,16 @@ def _summarize_one(
     except (RetrievalError, httpx.HTTPError, ValueError, RuntimeError) as exc:
         logger.exception("Failed to summarize %s", ref.canonical_id)
         if post_failures:
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                blocks=failure_blocks(ref.source_url, str(exc)),
-                text=f"Could not summarize paper: {exc}",
-            )
+            _post_failure(client, channel, thread_ts, ref.source_url, exc)
+
+
+def _post_failure(client, channel: str, thread_ts: str, source_url: str, exc: Exception) -> None:  # type: ignore[no-untyped-def]
+    client.chat_postMessage(
+        channel=channel,
+        thread_ts=thread_ts,
+        blocks=failure_blocks(source_url, str(exc)),
+        text=f"Could not summarize paper: {exc}",
+    )
 
 
 def slack_pdf_ref(file_info: dict) -> PaperRef:

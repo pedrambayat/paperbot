@@ -1,10 +1,11 @@
 # Paperbot
 
 Slack bot that auto-summarizes scientific papers shared in a lab channel. Post a
-paper link (arXiv, bioRxiv/medRxiv, DOI, or a direct PDF URL) or upload a PDF,
-and Paperbot retrieves the paper, summarizes it with an LLM, and replies
-in-thread with a structured summary (TL;DR, problem, method, result,
-limitations). SQLite dedupes so re-posts point back to the original summary.
+link to essentially any journal article (Nature, Cell, Science, PNAS, arXiv,
+bioRxiv/medRxiv, a DOI, or a direct PDF URL) or upload a PDF, and Paperbot
+retrieves the paper, summarizes it with an LLM, and replies in-thread with a
+structured summary (TL;DR, problem, method, result, limitations). SQLite
+dedupes so re-posts point back to the original summary.
 
 It runs as a single long-lived process using Slack **Socket Mode** — no public
 URL needed — so it can live on any always-on machine.
@@ -76,14 +77,21 @@ pytest
 
 ## Retrieval notes
 
-- Retrieval degrades gracefully: full-text PDF → JATS/XML full text (rxiv) or
-  Unpaywall/OpenAlex (DOI) → abstract-only. The summary is labeled with the
-  evidence level actually used.
-- bioRxiv/medRxiv and many publishers serve PDFs from behind Cloudflare, which
-  blocks plain HTTP clients on TLS fingerprint. Paperbot uses a
-  browser-impersonating client (`curl_cffi`) to fetch full text anyway — this
-  works best from residential/campus IPs; datacenter IPs (e.g. AWS) may still
-  be blocked and degrade those sources to abstract-only.
-- If a host still blocks the download, upload the PDF directly to Slack;
+- **Any journal link works.** arXiv, bioRxiv/medRxiv, doi.org, bare DOIs, and
+  nature.com URLs are recognized directly. Any *other* link is treated as a
+  candidate: Paperbot fetches the page and reads its Google Scholar/Highwire
+  citation meta tags (`citation_doi`, `citation_pdf_url`) — which every major
+  publisher embeds — to find the paper. Links with no such metadata (news,
+  docs, GitHub, etc.) are ignored silently.
+- **Institutional (subscription) full text.** For a DOI, Paperbot first tries
+  open-access copies (Unpaywall/OpenAlex), then falls back to the publisher's
+  own PDF using a browser-impersonating client (`curl_cffi`). Publisher access
+  is IP-based, so running this on a **campus/residential network** gets
+  subscription full text for paywalled Nature/Cell papers; a datacenter IP
+  (e.g. AWS) will usually be blocked and degrade to an abstract-only summary.
+  This is the main reason to prefer an on-campus host (e.g. Proxmox) over AWS.
+- Retrieval always degrades gracefully — full text → abstract-only — and the
+  summary is labeled with the evidence level actually used.
+- If a host blocks the download entirely, upload the PDF directly to Slack;
   Paperbot downloads Slack-hosted PDFs with the bot token and summarizes the
-  full document.
+  full document. This works from any host.

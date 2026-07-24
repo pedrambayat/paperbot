@@ -200,3 +200,65 @@ def test_job_from_event_output_is_consumable_by_process_job():
     )
     assert len(client.posts) == 1
     assert store.saved
+
+
+class FakeResolvingRetriever(FakeRetriever):
+    def __init__(self, paper=None, error=None, resolved=None, resolve_error=None):
+        super().__init__(paper=paper, error=error)
+        self.resolved = resolved
+        self.resolve_error = resolve_error
+        self.resolve_calls = []
+
+    def resolve_ref(self, ref):
+        self.resolve_calls.append(ref)
+        if self.resolve_error:
+            raise self.resolve_error
+        return self.resolved
+
+
+def test_process_job_skips_non_paper_webpage_silently():
+    store, client = FakeStore(existing=None), FakeClient()
+    retriever = FakeResolvingRetriever(resolved=None)
+    process_job(
+        _job(text="fyi https://someuniversity.edu/news/lab-wins-award"),
+        retriever=retriever,
+        store=store,
+        summarizer=DryRunSummarizer(),
+        client=client,
+        bot_token="xoxb",
+    )
+    assert len(retriever.resolve_calls) == 1
+    assert client.posts == []
+    assert store.saved == []
+
+
+def test_process_job_summarizes_resolved_webpage_ref():
+    doi_ref = PaperRef(PaperKind.DOI, "10.1016/j.cell.2023.12.016", "https://www.cell.com/cell/fulltext/S1")
+    store, client = FakeStore(existing=None), FakeClient()
+    retriever = FakeResolvingRetriever(paper=_paper(), resolved=doi_ref)
+    process_job(
+        _job(text="https://www.cell.com/cell/fulltext/S0092-8674(23)01331-1"),
+        retriever=retriever,
+        store=store,
+        summarizer=DryRunSummarizer(),
+        client=client,
+        bot_token="xoxb",
+    )
+    assert len(client.posts) == 1
+    assert store.saved
+
+
+def test_process_job_posts_failure_when_journal_page_unresolvable():
+    store, client = FakeStore(existing=None), FakeClient()
+    retriever = FakeResolvingRetriever(resolve_error=RetrievalError("blocked by Cloudflare"))
+    process_job(
+        _job(text="https://www.cell.com/cell/fulltext/S0092-8674(23)01331-1"),
+        retriever=retriever,
+        store=store,
+        summarizer=DryRunSummarizer(),
+        client=client,
+        bot_token="xoxb",
+    )
+    assert len(client.posts) == 1
+    assert "Could not" in client.posts[0]["text"]
+    assert store.saved == []

@@ -62,3 +62,33 @@ def test_detect_generic_pdf_url():
 
 def test_normalize_doi():
     assert normalize_doi("DOI:10.1101/ABC.") == "10.1101/abc"
+
+
+def test_detect_nature_article_url_maps_to_doi():
+    refs = detect_papers("https://www.nature.com/articles/s41586-024-07487-w")
+    assert len(refs) == 1
+    assert refs[0].kind == PaperKind.DOI
+    assert refs[0].identifier == "10.1038/s41586-024-07487-w"
+
+
+def test_detect_cell_article_url_becomes_webpage_candidate():
+    refs = detect_papers("https://www.cell.com/cell/fulltext/S0092-8674(23)01331-1")
+    assert len(refs) == 1
+    assert refs[0].kind == PaperKind.WEBPAGE
+
+
+def test_detect_unknown_url_becomes_webpage_candidate():
+    refs = detect_papers("https://journals.example.edu/article/12345?utm_source=slack")
+    assert len(refs) == 1
+    assert refs[0].kind == PaperKind.WEBPAGE
+    # identity ignores www/query so re-posts dedupe consistently
+    assert refs[0].identifier == "journals.example.edu/article/12345"
+
+
+def test_detect_skips_common_non_paper_hosts():
+    text = (
+        "https://myworkspace.slack.com/archives/C1/p123 "
+        "https://docs.google.com/document/d/abc "
+        "https://github.com/org/repo https://www.youtube.com/watch?v=x"
+    )
+    assert detect_papers(text) == []
