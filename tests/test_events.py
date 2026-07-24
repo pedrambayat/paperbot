@@ -1,19 +1,10 @@
-from paperbot.events import job_from_event, url_verification_challenge
+from paperbot.events import job_from_event
 
 CHANNEL = "C123"
 
 
 def _callback(event: dict) -> dict:
     return {"type": "event_callback", "event": event}
-
-
-def test_url_verification_returns_challenge():
-    payload = {"type": "url_verification", "challenge": "abc123"}
-    assert url_verification_challenge(payload) == "abc123"
-
-
-def test_non_challenge_payload_returns_none():
-    assert url_verification_challenge(_callback({"type": "message", "text": "hi"})) is None
 
 
 def test_message_with_arxiv_link_produces_job():

@@ -1,0 +1,26 @@
+# systemd unit for running Paperbot on an always-on Linux host.
+#
+# Install:
+#   sudo cp deploy/paperbot.service /etc/systemd/system/paperbot.service
+#   # edit WorkingDirectory / EnvironmentFile / ExecStart / User to match your checkout
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now paperbot
+#
+# Logs:
+#   journalctl -u paperbot -f
+
+[Unit]
+Description=Paperbot Slack paper summarizer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=paperbot
+WorkingDirectory=/opt/paperbot
+EnvironmentFile=/opt/paperbot/.env
+ExecStart=/opt/paperbot/.venv/bin/paperbot
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

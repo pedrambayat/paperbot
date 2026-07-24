@@ -13,20 +13,12 @@ def detect_pdf_files(event: dict) -> list[dict]:
     ]
 
 
-def url_verification_challenge(payload: dict) -> str | None:
-    """Return the challenge string for Slack's Events API URL handshake, else None."""
-    if payload.get("type") == "url_verification":
-        return payload.get("challenge")
-    return None
-
-
 def job_from_event(payload: dict, channel_id: str) -> dict | None:
     """Build a background job from a Slack ``event_callback`` payload.
 
-    Returns a small dict to enqueue when the event is a non-bot message in the
-    watched channel that contains a paper link/DOI or a PDF upload; otherwise
-    None. Mirrors the filtering the Socket Mode handler applies, so both entry
-    points behave identically.
+    Returns a small dict describing the work when the event is a non-bot
+    message in the watched channel that contains a paper link/DOI or a PDF
+    upload; otherwise None.
     """
     if payload.get("type") != "event_callback":
         return None

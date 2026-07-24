@@ -1,15 +1,17 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
 from paperbot.config import DEFAULT_OPENAI_MODEL, Settings
 
 
-def test_settings_allow_missing_app_token_for_serverless():
-    # The serverless worker has no Socket Mode app token; it must still load.
+def test_settings_require_app_token():
     env = {**os.environ, "SLACK_BOT_TOKEN": "xoxb-test", "PAPERBOT_CHANNEL_ID": "C123"}
     env.pop("SLACK_APP_TOKEN", None)
     with patch.dict(os.environ, env, clear=True):
-        assert Settings.from_env().slack_app_token == ""
+        with pytest.raises(KeyError):
+            Settings.from_env()
 
 
 def test_settings_default_to_cheap_openai_model():

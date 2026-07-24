@@ -33,10 +33,9 @@ def summarize_and_post(
 ) -> None:
     """Dedup, retrieve, summarize, post, and record one paper.
 
-    ``store`` only needs ``get(canonical_id) -> dict | None`` and
-    ``save(paper, summary, channel, ts)``, so it works with the SQLite store
-    (Socket Mode) or the Redis store (serverless). The retrieval is deferred
-    behind ``paper_factory`` so a duplicate never triggers a network fetch.
+    ``store`` only needs ``get(canonical_id) -> dict | None``, ``claim``, and
+    ``save(paper, summary, channel, ts)``. The retrieval is deferred behind
+    ``paper_factory`` so a duplicate never triggers a network fetch.
     """
     existing = store.get(ref.canonical_id)
     if existing and existing.get("slack_ts"):
@@ -78,9 +77,8 @@ def process_job(
 ) -> None:
     """Summarize every paper link and PDF in a job, posting failures inline.
 
-    Shared by the Socket Mode handler and the serverless worker so both behave
-    identically. ``slack_pdf_retriever`` is injectable for testing; it defaults
-    to the real Slack-hosted PDF download.
+    ``slack_pdf_retriever`` is injectable for testing; it defaults to the real
+    Slack-hosted PDF download.
     """
     if slack_pdf_retriever is None:
         slack_pdf_retriever = retrieve_slack_pdf
